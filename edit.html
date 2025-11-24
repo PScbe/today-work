@@ -1,0 +1,2556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Possible Studio Edit</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        input[type="date"]::-webkit-datetime-edit-day-field:not([value=""]),\
+        input[type="date"]::-webkit-datetime-edit-month-field:not([value=""]),\
+        input[type="date"]::-webkit-datetime-edit-year-field:not([value=""]) {
+            color: #1F2937;
+        }
+        input[type="date"]:invalid::-webkit-datetime-edit-day-field,\
+        input[type="date"]:invalid::-webkit-datetime-edit-month-field,\
+        input[type="date"]:invalid::-webkit-datetime-edit-year-field {
+            color: #6B7280;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- React and ReactDOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+    <!-- Firebase CDN imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, deleteDoc, where, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+        
+        // Expose Firebase dependencies globally for the Babel script
+        window.firebaseDependencies = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut,
+            getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, deleteDoc, where, getDoc, setDoc
+        };
+
+        // Global configuration variables (replace with your actual Firebase config)
+        const __app_id = 'possible-edit';
+        const __firebase_config = JSON.stringify({
+            apiKey: "AIzaSyBgK_QIzwtpTv23I54CcLKThWuzPiG5F-Q",
+            authDomain: "possible-edit.firebaseapp.com",
+            projectId: "possible-edit",
+            storageBucket: "possible-edit.firebasestorage.app",
+            messagingSenderId: "1035721158713",
+            appId: "1:1035721158713:web:26ec99e2bc141c39f51de8",
+            measurementId: "G-EM1KWNFJBC"
+        });
+        const __initial_auth_token = null; // Set to your initial auth token if needed
+
+        window.globalAppConfig = {
+            __app_id, __firebase_config, __initial_auth_token
+        };
+    </script>
+
+    <!-- React Application Script -->
+    <script type="text/babel">
+        // Access Firebase dependencies and global config from the window object
+        const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } = window.firebaseDependencies;
+        const { getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, deleteDoc, where, getDoc, setDoc } = window.firebaseDependencies;
+        const { __app_id, __firebase_config, __initial_auth_token } = window.globalAppConfig;
+
+        // --- Utility Functions ---
+        
+        const isSameDay = (d1, d2) => {
+            return d1.getFullYear() === d2.getFullYear() &&
+                   d1.getMonth() === d2.getMonth() &&
+                   d1.getDate() === d2.getDate();
+        };
+
+        const getProjectWorkingStatus = (project) => {
+            if (!project.isTodayWorking || !project.lastMarkedToday) {
+                return false;
+            }
+            const lastMarkedDate = project.lastMarkedToday;
+            const today = new Date();
+            
+            // The project is "Today Working" only if the boolean is true AND the last time it was marked 
+            // is the same calendar day as today (or if it's the current session's initial load and is marked true).
+            return isSameDay(lastMarkedDate, today);
+        };
+        
+        const isVideoWorkingToday = (video) => {
+             // For videos, we only rely on the local flag set by the editor work modal, 
+             // but we can add a check against the project's overall status if needed for consistency.
+             // For this daily reset logic, we focus on the project-level flag.
+             return video.isTodayWorking;
+        }
+
+        const getFilteredProjects = (projects, currentTab) => {
+            const now = Date.now();
+            const twentyFourHours = 24 * 60 * 60 * 1000;
+
+            let filteredProjects;
+
+            if (currentTab === 'active') {
+                filteredProjects = projects.filter(p => {
+                    const isOldCompleted = p.status === 'completed' && p.completedAt && (now - p.completedAt.getTime()) >= twentyFourHours;
+                    const isOldDropped = p.status === 'dropped' && p.droppedAt && (now - p.droppedAt.getTime()) >= twentyFourHours;
+                    return !isOldCompleted && !isOldDropped;
+                });
+            } else { // 'completed' tab
+                filteredProjects = projects.filter(p => {
+                    const isOldCompleted = p.status === 'completed' && p.completedAt && (now - p.completedAt.getTime()) >= twentyFourHours;
+                    const isOldDropped = p.status === 'dropped' && p.droppedAt && (now - p.droppedAt.getTime()) >= twentyFourHours;
+                    return isOldCompleted || isOldDropped;
+                });
+            }
+
+            return filteredProjects.sort((a, b) => {
+                if (a.isUrgent && !b.isUrgent) return -1;
+                if (!a.isUrgent && b.isUrgent) return 1;
+
+                const statusOrder = { 'on process': 1, 'up next': 2, 'on hold': 3, 'completed': 4, 'dropped': 5 };
+                const statusA = statusOrder[a.status] || 99;
+                const statusB = statusOrder[b.status] || 99;
+                if (statusA !== statusB) return statusA - statusB;
+                
+                if (['on process', 'on hold', 'up next'].includes(a.status)) {
+                    if (!a.shootDay) return 1;
+                    if (!b.shootDay) return -1;
+                    return a.shootDay.getTime() - b.shootDay.getTime();
+                }
+                
+                const timeA = a.status === 'completed' ? a.completedAt?.getTime() : a.droppedAt?.getTime();
+                const timeB = b.status === 'completed' ? b.droppedAt?.getTime() : b.droppedAt?.getTime();
+                if (!timeA) return 1;
+                if (!timeB) return -1;
+                return timeB - timeA;
+            });
+        };
+
+        const calculateDaysAfterShoot = (shootDay) => {
+            if (!shootDay) return 'N/A';
+            const today = new Date();
+            const shootDate = new Date(shootDay.getFullYear(), shootDay.getMonth(), shootDay.getDate());
+            const currentDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const diffTime = Math.abs(currentDate.getTime() - shootDate.getTime());
+            return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        };
+
+        const calculateRemainingDays = (deadline) => {
+            if (!deadline) return 'No Deadline';
+            const today = new Date();
+            const deadlineDate = new Date(deadline.getFullYear(), deadline.getMonth(), deadline.getDate());
+            const currentDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const diffTime = deadlineDate.getTime() - currentDate.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            if (diffDays > 0) return `${diffDays} days`;
+            if (diffDays === 0) return 'Due Today';
+            return `${Math.abs(diffDays)} days overdue`;
+        };
+
+        const formatDateToDDMMYYYY = (date) => {
+            if (!date) return 'N/A';
+            const d = new Date(date);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            return `${day}/${month}/${year}`;
+        };
+
+        const formatDateTime = (date) => {
+            if (!date) return 'N/A';
+            const d = new Date(date);
+            return d.toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
+        };
+        
+        const formatTime = (date) => {
+            if (!date) return 'N/A';
+            return new Date(date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+        };
+        
+        const getTodayDate = () => {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const calculateTimeDifference = (start, end) => {
+            if (!start) return 'N/A';
+            const finalEnd = end || new Date();
+            const diffMs = finalEnd.getTime() - start.getTime();
+            const totalSeconds = Math.floor(diffMs / 1000);
+            const days = Math.floor(totalSeconds / (3600 * 24));
+            const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+            let timeString = '';
+            if (days > 0) timeString += `${days} Days `;
+            if (hours > 0) timeString += `${hours} Hours `;
+            if (minutes > 0) timeString += `${minutes} Minutes`;
+
+            if (!end) return 'Ongoing';
+            return timeString.trim() || '0 Minutes';
+        };
+
+        // --- Error Boundary Component ---
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, errorMessage: '' };
+            }
+
+            static getDerivedStateFromError(error) {
+                return { hasError: true, errorMessage: error.message || 'Something went wrong.' };
+            }
+
+            componentDidCatch(error, errorInfo) {
+                console.error("ErrorBoundary caught error:", error, errorInfo);
+            }
+
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="container mx-auto p-4 text-center">
+                            <h2 className="text-lg font-bold text-red-600">An Error Occurred</h2>
+                            <p className="text-red-500 text-sm font-medium mt-2">
+                                {this.state.errorMessage} Please refresh the page or try again later.
+                            </p>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
+        // --- Message Box Component ---
+        const MessageBox = ({ message, type, onClose }) => {
+            if (!message) return null;
+            return (
+                <div className={`fixed top-5 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-md shadow-lg z-[100] bg-opacity-90 text-lg font-semibold
+                    ${type === 'success' ? 'bg-green-500 text-white' : ''}
+                    ${type === 'error' ? 'bg-red-500 text-white' : ''}
+                    ${type === 'info' ? 'bg-blue-500 text-white' : ''}`}>
+                    {message}
+                    <button onClick={onClose} className="ml-4 text-white font-bold text-xl">&times;</button>
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            const [userId, setUserId] = React.useState(null);
+            const [isAdmin, setIsAdmin] = React.useState(false);
+            const [isUrgentAdmin, setIsUrgentAdmin] = React.useState(false);
+            const [isEditor, setIsEditor] = React.useState(false);
+            const [projects, setProjects] = React.useState([]);
+            const [clients, setClients] = React.useState([]);
+            const [isLoading, setIsLoading] = React.useState(true);
+            const [message, setMessage] = React.useState({ text: '', type: '' });
+            const [showAddProjectModal, setShowAddProjectModal] = React.useState(false);
+            const [showManageClientsModal, setShowManageClientsModal] = React.useState(false);
+            const [showLoginModal, setShowLoginModal] = React.useState(false);
+            const [currentTab, setCurrentTab] = React.useState('active');
+            const [urgentProjectId, setUrgentProjectId] = React.useState(null);
+            const [showAllVideos, setShowAllVideos] = React.useState(false);
+            const [showEditorWorkModal, setShowEditorWorkModal] = React.useState(false);
+            const [showWorkLogsModal, setShowWorkLogsModal] = React.useState(false);
+            
+            const showMessage = React.useCallback((text, type) => {
+                setMessage({ text, type });
+                const timer = setTimeout(() => setMessage({ text: '', type: '' }), 3000);
+                return () => clearTimeout(timer);
+            }, []);
+
+            const app = React.useMemo(() => initializeApp(JSON.parse(__firebase_config)), []);
+            const auth = React.useMemo(() => getAuth(app), [app]);
+            const db = React.useMemo(() => getFirestore(app), [app]);
+
+            React.useEffect(() => {
+                const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                    } else {
+                        try {
+                            if (__initial_auth_token) {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (error) {
+                            showMessage("Error authenticating user. Please try again.", "error");
+                        }
+                    }
+                }, (error) => {
+                    showMessage("Error monitoring authentication state.", "error");
+                });
+                return () => unsubscribeAuth();
+            }, [auth, showMessage]);
+
+            React.useEffect(() => {
+                if (!db || !userId) {
+                    setIsLoading(true);
+                    return;
+                }
+                
+                const projectsCollectionRef = collection(db, `artifacts/${__app_id}/public/data/projects`);
+                const unsubscribeProjects = onSnapshot(projectsCollectionRef, (snapshot) => {
+                    try {
+                        const fetchedProjects = snapshot.docs.map(doc => {
+                            const data = doc.data();
+                            
+                            // 1. Process timestamps from Firestore objects to Date objects
+                            const lastMarkedDate = data.lastMarkedToday?.toDate?.();
+
+                            // 2. Determine actual 'Today Working' status based on date reset logic
+                            let isWorkingToday = false;
+                            if (data.isTodayWorking && lastMarkedDate) {
+                                isWorkingToday = isSameDay(lastMarkedDate, new Date());
+                            } else if (data.isTodayWorking) {
+                                // Handle legacy data that might have the flag but no timestamp (treat as marked today)
+                                isWorkingToday = true;
+                            }
+                            
+                            return {
+                                id: doc.id,
+                                ...data,
+                                createdAt: data.createdAt?.toDate?.() || new Date(),
+                                shootDay: data.shootDay?.toDate?.(),
+                                completedAt: data.completedAt?.toDate?.(),
+                                droppedAt: data.droppedAt?.toDate?.(),
+                                approvedAt: data.approvedAt?.toDate?.(),
+                                deadline: data.deadline?.toDate?.(),
+                                // Store original Firestore values for DB updates:
+                                lastMarkedToday: lastMarkedDate, 
+                                // Store the computed status for UI use:
+                                isTodayWorking: isWorkingToday, 
+
+                                // Note: Video level status remains simple boolean as it's typically controlled by the EditorWorkModal session
+                                videos: Array.isArray(data.videos) ? data.videos.map(v => ({...v, isTodayWorking: v.isTodayWorking || false})) : [],
+                            };
+                        });
+                        setProjects(fetchedProjects);
+                        const urgentProject = fetchedProjects.find(p => p.isUrgent);
+                        setUrgentProjectId(urgentProject ? urgentProject.id : null);
+                        setIsLoading(false);
+                    } catch (err) {
+                        showMessage("Error loading projects. Please refresh.", "error");
+                        setIsLoading(false);
+                    }
+                }, (error) => {
+                    showMessage(`Error fetching projects: ${error.message}`, "error");
+                    setIsLoading(false);
+                });
+
+                const clientsCollectionRef = collection(db, `artifacts/${__app_id}/public/data/clients`);
+                const unsubscribeClients = onSnapshot(clientsCollectionRef, (snapshot) => {
+                    try {
+                        setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                    } catch (err) {
+                        showMessage("Error loading clients. Please refresh.", "error");
+                    }
+                }, (error) => {
+                     showMessage(`Error fetching clients: ${error.message}`, "error");
+                });
+
+                return () => {
+                    unsubscribeProjects();
+                    unsubscribeClients();
+                };
+            }, [db, userId, showMessage]);
+
+            const handleLogin = async (password) => {
+                if (password === '1122') {
+                    setIsAdmin(true); setIsEditor(false); setIsUrgentAdmin(false); 
+                    showMessage("Admin logged in successfully!", "success");
+                    setShowLoginModal(false);
+                } else if (password === '9361') {
+                    setIsUrgentAdmin(true); setIsAdmin(false); setIsEditor(false); 
+                    showMessage("Urgent Admin logged in successfully!", "success");
+                    setShowLoginModal(false);
+                } else if (password === '9042') {
+                    setIsEditor(true); setIsAdmin(false); setIsUrgentAdmin(false);
+                    showMessage("Editor logged in successfully!", "success");
+                    setShowLoginModal(false);
+                } else {
+                    showMessage("Incorrect password.", "error");
+                }
+            };
+            
+            const handleLogout = () => {
+                setIsAdmin(false);
+                setIsUrgentAdmin(false);
+                setIsEditor(false);
+                showMessage("Logged out successfully.", "info");
+            };
+
+            const handleAddClient = async (clientName) => {
+                try {
+                    const docRef = await addDoc(collection(db, `artifacts/${__app_id}/public/data/clients`), {
+                        clientName: clientName, createdAt: serverTimestamp(),
+                    });
+                    showMessage("Client added successfully!", "success");
+                    return { success: true, clientName: clientName, clientId: docRef.id };
+                } catch (e) {
+                    showMessage("Error adding client. Please try again.", "error");
+                    return { success: false };
+                }
+            };
+            
+            const handleDeleteClient = async (clientId) => {
+                if (!isAdmin) {
+                    showMessage("Permission denied.", "error");
+                    return;
+                }
+                try {
+                    const clientRef = doc(db, `artifacts/${__app_id}/public/data/clients`, clientId);
+                    await deleteDoc(clientRef);
+                    showMessage("Client deleted successfully!", "success");
+                } catch (e) {
+                    showMessage("Error deleting client.", "error");
+                }
+            };
+            
+            const handleAddProject = async (newProject) => {
+                try {
+                    await addDoc(collection(db, `artifacts/${__app_id}/public/data/projects`), {
+                        ...newProject,
+                        createdAt: serverTimestamp(),
+                        status: 'on hold',
+                        deadline: newProject.deadline ? new Date(newProject.deadline) : null,
+                        shootDay: newProject.shootDay ? new Date(newProject.shootDay) : null,
+                        isUrgent: false,
+                        isTodayWorking: false, // Initial state
+                        lastMarkedToday: null, // Initial timestamp
+                    });
+                    showMessage("Project added successfully!", "success");
+                    setShowAddProjectModal(false);
+                } catch (e) {
+                    showMessage("Error adding project. Please try again.", "error");
+                }
+            };
+            
+            const handleUpdateProjectStatus = async (projectId, newStatus) => {
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    const currentProject = projects.find(p => p.id === projectId);
+                    if (!currentProject) { showMessage("Project not found.", "error"); return; }
+                    if (isAdmin) {
+                        const updateData = { status: newStatus, requestedStatus: null, requestedBy: null, approvedAt: serverTimestamp() };
+                        if (newStatus === 'completed') {
+                            updateData.completedAt = serverTimestamp(); updateData.droppedAt = null; updateData.isUrgent = false; updateData.isTodayWorking = false; updateData.lastMarkedToday = null;
+                            if (currentProject.id === urgentProjectId) setUrgentProjectId(null);
+                        } else if (newStatus === 'dropped') {
+                            updateData.droppedAt = serverTimestamp(); updateData.completedAt = null; updateData.isTodayWorking = false; updateData.lastMarkedToday = null;
+                        } else {
+                            updateData.completedAt = null; updateData.droppedAt = null;
+                        }
+                        await updateDoc(projectRef, updateData);
+                        showMessage("Project status updated!", "success");
+                    } else if (isEditor) {
+                        if (['completed', 'dropped'].includes(newStatus)) {
+                            await updateDoc(projectRef, { requestedStatus: newStatus, requestedBy: userId });
+                            showMessage(`Status change to '${newStatus}' requested.`, "info");
+                        } else {
+                            await updateDoc(projectRef, { status: newStatus, requestedStatus: null, requestedBy: null, approvedAt: null, completedAt: null, droppedAt: null });
+                            showMessage("Project status updated!", "success");
+                        }
+                    } else {
+                        showMessage("Permission denied.", "error");
+                    }
+                } catch (e) {
+                    showMessage("Error updating project status.", "error");
+                }
+            };
+
+            const handleUpdateVideoStatus = async (projectId, videoIndex, newStatus) => {
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    const currentProject = projects.find(p => p.id === projectId);
+                    if (!currentProject) { showMessage("Project not found.", "error"); return; }
+
+                    const updatedVideos = [...currentProject.videos];
+                    updatedVideos[videoIndex].status = newStatus;
+                    
+                    // Reset 'isTodayWorking' when status changes from 'On Process'
+                    if (newStatus !== 'On Process') {
+                        updatedVideos[videoIndex].isTodayWorking = false;
+                    }
+
+                    const allVideosCompleted = updatedVideos.length > 0 && updatedVideos.every(video => video.status === 'Completed');
+                    let projectStatusUpdate = {};
+                    if (allVideosCompleted && currentProject.status !== 'completed') {
+                        projectStatusUpdate = { status: 'completed', completedAt: serverTimestamp(), isUrgent: false, isTodayWorking: false, lastMarkedToday: null };
+                    } else if (!allVideosCompleted && currentProject.status === 'completed') {
+                        projectStatusUpdate = { status: 'on process', completedAt: null };
+                    }
+
+                    await updateDoc(projectRef, { videos: updatedVideos, ...projectStatusUpdate });
+                } catch (e) {
+                    showMessage("Error updating video status.", "error");
+                }
+            };
+            
+            const handleApproveStatusChange = async (projectId) => {
+                if (!isAdmin) { showMessage("Permission denied.", "error"); return; }
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    const projectToApprove = projects.find(p => p.id === projectId);
+                    if (!projectToApprove || !projectToApprove.requestedStatus) { showMessage("No pending status change.", "error"); return; }
+                    const newStatus = projectToApprove.requestedStatus;
+                    const updateData = { status: newStatus, requestedStatus: null, requestedBy: null, approvedAt: serverTimestamp() };
+                    if (newStatus === 'completed') {
+                        updateData.completedAt = serverTimestamp(); updateData.droppedAt = null; updateData.isUrgent = false; updateData.isTodayWorking = false; updateData.lastMarkedToday = null;
+                        if (projectToApprove.id === urgentProjectId) setUrgentProjectId(null);
+                    } else if (newStatus === 'dropped') {
+                        updateData.droppedAt = serverTimestamp(); updateData.completedAt = null; updateData.isTodayWorking = false; updateData.lastMarkedToday = null;
+                    }
+                    await updateDoc(projectRef, updateData);
+                    showMessage(`Status change to '${newStatus}' approved!`, "success");
+                } catch (e) {
+                    showMessage("Error approving status change.", "error");
+                }
+            };
+            
+            const handleRejectStatusChange = async (projectId) => {
+                if (!isAdmin) { showMessage("Permission denied.", "error"); return; }
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    await updateDoc(projectRef, { requestedStatus: null, requestedBy: null });
+                    showMessage("Status change request rejected.", "info");
+                } catch (e) {
+                    showMessage("Error rejecting status change.", "error");
+                }
+            };
+            
+            const handleEditProject = async (projectId, updatedFields) => {
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    
+                    // --- Daily Reset Logic Implementation for Firestore Update ---
+                    if (updatedFields.isTodayWorking !== undefined) {
+                        const newWorkingStatus = updatedFields.isTodayWorking;
+                        // Always update timestamp when marking as 'Today Working'
+                        updatedFields.lastMarkedToday = newWorkingStatus ? serverTimestamp() : null;
+                    }
+                    // -----------------------------------------------------------
+
+                    await updateDoc(projectRef, updatedFields);
+                    showMessage("Project updated successfully!", "success");
+                } catch (e) {
+                    showMessage("Error updating project.", "error");
+                }
+            };
+            
+            const handleDeleteProject = async (projectId) => {
+                if (!isAdmin) { showMessage("Permission denied.", "error"); return; }
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    await deleteDoc(projectRef);
+                    showMessage("Project deleted successfully!", "success");
+                } catch (e) {
+                    showMessage("Error deleting project.", "error");
+                }
+            };
+            
+            const handleMarkUrgent = async (projectId) => {
+                if (!isUrgentAdmin) { showMessage("Permission denied.", "error"); return; }
+                try {
+                    if (urgentProjectId && urgentProjectId !== projectId) {
+                        const previousUrgentRef = doc(db, `artifacts/${__app_id}/public/data/projects`, urgentProjectId);
+                        await updateDoc(previousUrgentRef, { isUrgent: false });
+                    }
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    await updateDoc(projectRef, { isUrgent: true });
+                    setUrgentProjectId(projectId);
+                    showMessage("Project marked as urgent!", "success");
+                } catch (e) {
+                    showMessage("Error marking project urgent.", "error");
+                }
+            };
+            
+            const handleClearUrgent = async (projectId) => {
+                if (!isUrgentAdmin) { showMessage("Permission denied.", "error"); return; }
+                try {
+                    const projectRef = doc(db, `artifacts/${__app_id}/public/data/projects`, projectId);
+                    await updateDoc(projectRef, { isUrgent: false });
+                    setUrgentProjectId(null);
+                    showMessage("Urgent status cleared!", "success");
+                } catch (e) {
+                    showMessage("Error clearing urgent status.", "error");
+                }
+            };
+            
+            return (
+                <ErrorBoundary>
+                    <div className="min-h-screen bg-gray-50 font-sans text-gray-900 flex flex-col">
+                        <MessageBox message={message.text} type={message.type} onClose={() => setMessage({ text: '', type: '' })} />
+                        <header className="bg-white border-b border-gray-200 p-3">
+                            <div className="container mx-auto flex items-center justify-between gap-3">
+                                <div className="flex items-center space-x-4">
+                                    <h1 className="text-xl sm:text-2xl font-bold">Possible Studio Edit</h1>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition duration-200
+                                                ${currentTab === 'active' ? 'bg-yellow-500 text-gray-900' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                            onClick={() => setCurrentTab('active')}
+                                        >
+                                            Active Projects
+                                        </button>
+                                        <button
+                                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition duration-200
+                                                ${currentTab === 'completed' ? 'bg-yellow-500 text-gray-900' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                            onClick={() => setCurrentTab('completed')}
+                                        >
+                                            Completed
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    {(isAdmin || isUrgentAdmin || isEditor) ? (
+                                        <>
+                                            <button onClick={() => setShowEditorWorkModal(true)}
+                                                className="bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                                {isEditor ? 'My Work' : "Today's Work"}
+                                            </button>
+                                            <button onClick={() => setShowWorkLogsModal(true)}
+                                                className="bg-gray-700 hover:bg-gray-800 text-white text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                                View Logs
+                                            </button>
+                                            <button onClick={handleLogout}
+                                                className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1.5 px-4 rounded-md transition duration-200">
+                                                Logout
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <button onClick={() => setShowLoginModal(true)}
+                                            className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Login
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </header>
+                        <main className="container mx-auto p-4 flex-grow max-w-6xl">
+                            <div className="mb-6">
+                                <MotherCard
+                                    projects={projects}
+                                    showAllVideos={showAllVideos}
+                                    setShowAllVideos={setShowAllVideos}
+                                    urgentProjectId={urgentProjectId}
+                                    formatDateToDDMMYYYY={formatDateToDDMMYYYY}
+                                />
+                            </div>
+                            <div className="flex flex-wrap items-center justify-center gap-3 mb-6">
+                                {isAdmin && (
+                                    <>
+                                        <button
+                                            onClick={() => setShowAddProjectModal(true)}
+                                            className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-medium py-2 px-6 rounded-md transition duration-200"
+                                        >
+                                            + Add Project
+                                        </button>
+                                        <button
+                                            onClick={() => setShowManageClientsModal(true)}
+                                            className="bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-6 rounded-md transition duration-200"
+                                        >
+                                            Manage Clients
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                            <div className="flex flex-col gap-4">
+                                {isLoading ? (
+                                    <p className="col-span-full text-center text-gray-600 text-sm py-8">
+                                        Loading projects...
+                                    </p>
+                                ) : getFilteredProjects(projects, currentTab).length === 0 ? (
+                                    <p className="col-span-full text-center text-gray-600 text-sm py-8">
+                                        {currentTab === 'active' ? 'No active projects found.' : 'No completed or dropped projects.'}
+                                    </p>
+                                ) : (
+                                    Object.entries(getFilteredProjects(projects, currentTab).reduce((acc, project) => {
+                                        const clientName = project.clientName || 'Unassigned';
+                                        if (!acc[clientName]) {
+                                            acc[clientName] = [];
+                                        }
+                                        acc[clientName].push(project);
+                                        return acc;
+                                    }, {})).map(([clientName, clientProjects]) => (
+                                        <ClientProjectGroup
+                                            key={clientName}
+                                            clientName={clientName}
+                                            projects={clientProjects}
+                                            calculateDaysAfterShoot={calculateDaysAfterShoot}
+                                            calculateRemainingDays={calculateRemainingDays}
+                                            formatDateToDDMMYYYY={formatDateToDDMMYYYY}
+                                            formatDateTime={formatDateTime}
+                                            onUpdateStatus={handleUpdateProjectStatus}
+                                            onEditProject={handleEditProject}
+                                            onApproveStatusChange={handleApproveStatusChange}
+                                            onRejectStatusChange={handleRejectStatusChange}
+                                            onDeleteProject={handleDeleteProject}
+                                            onMarkUrgent={handleMarkUrgent}
+                                            onClearUrgent={handleClearUrgent}
+                                            isAdmin={isAdmin}
+                                            isUrgentAdmin={isUrgentAdmin}
+                                            isEditor={isEditor}
+                                            urgentProjectId={urgentProjectId}
+                                            clients={clients}
+                                            onUpdateVideoStatus={handleUpdateVideoStatus}
+                                        />
+                                    ))
+                                )}
+                            </div>
+                        </main>
+                        <footer className="bg-white border-t border-gray-200 text-gray-600 text-center p-3 text-sm">
+                            <p>© {new Date().getFullYear()} Possible Studio Edit</p>
+                        </footer>
+                        {showAddProjectModal && (
+                            <AddProjectModal
+                                onClose={() => setShowAddProjectModal(false)}
+                                onAddProject={handleAddProject}
+                                onAddClient={handleAddClient}
+                                isAdmin={isAdmin}
+                                clients={clients}
+                            />
+                        )}
+                        {showManageClientsModal && isAdmin && (
+                            <ManageClientsModal
+                                onClose={() => setShowManageClientsModal(false)}
+                                clients={clients}
+                                onAddClient={handleAddClient}
+                                onDeleteClient={handleDeleteClient}
+                            />
+                        )}
+                         {showLoginModal && (
+                            <LoginModal
+                                onClose={() => setShowLoginModal(false)}
+                                onLogin={handleLogin}
+                            />
+                        )}
+                        {showEditorWorkModal && (
+                            <EditorWorkModal
+                                onClose={() => setShowEditorWorkModal(false)}
+                                isEditor={isEditor}
+                                isAdmin={isAdmin}
+                                projects={projects}
+                                userId={userId}
+                                db={db}
+                                showMessage={showMessage}
+                                onUpdateVideoStatus={handleUpdateVideoStatus}
+                            />
+                        )}
+                        {showWorkLogsModal && (
+                            <WorkLogsModal
+                                onClose={() => setShowWorkLogsModal(false)}
+                                isAdmin={isAdmin}
+                                db={db}
+                                showMessage={showMessage}
+                            />
+                        )}
+                    </div>
+                </ErrorBoundary>
+            );
+        };
+
+        const ClientProjectGroup = ({ clientName, projects, ...props }) => {
+            const [isCollapsed, setIsCollapsed] = React.useState(true);
+            const onProcessCount = projects.filter(p => p.status === 'on process').length;
+            const upNextCount = projects.filter(p => p.status === 'up next').length;
+            const urgentCount = projects.filter(p => p.isUrgent).length;
+            
+            // Filter projects based on the computed status
+            const todayWorkingProjects = projects.filter(p => getProjectWorkingStatus(p));
+            const todayWorkingCount = todayWorkingProjects.length;
+            
+            // Check if there is exactly one 'on process' project that is currently marked working.
+            const onProcessProjects = projects.filter(p => p.status === 'on process');
+            
+            // If only one 'on process' project exists, we can use its status for the single checkbox.
+            const singleOnProcessProject = onProcessProjects.length === 1 ? onProcessProjects[0] : null;
+            const isSingleProjectMarkedToday = singleOnProcessProject ? getProjectWorkingStatus(singleOnProcessProject) : false;
+
+            const handleToggleTodayWorkingProjectGroup = (e) => {
+                e.stopPropagation(); // Prevent collapsing the group
+                if (singleOnProcessProject) {
+                    // Toggle status. The effect hook will handle updating the timestamp.
+                    props.onEditProject(singleOnProcessProject.id, { isTodayWorking: !isSingleProjectMarkedToday });
+                }
+            };
+
+
+            return (
+                <div className="bg-white rounded-md shadow-lg border border-gray-200 overflow-hidden">
+                    <div className="flex items-center justify-between p-4 bg-gray-100 cursor-pointer" onClick={() => setIsCollapsed(!isCollapsed)}>
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-lg font-bold text-gray-900">{clientName}</h2>
+                            <div className="flex items-center space-x-2">
+                                {onProcessCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500 text-gray-900">
+                                        {onProcessCount} On Process
+                                    </span>
+                                )}
+                                {upNextCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-500 text-white">
+                                        {upNextCount} Up Next
+                                    </span>
+                                )}
+                                {urgentCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-700 text-white animate-pulse">
+                                        {urgentCount} Urgent
+                                    </span>
+                                )}
+                                <span className="text-sm font-medium text-gray-600">
+                                    / {projects.length} total
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div className="flex items-center space-x-4">
+                            {/* --- Tick Box/Indicator Area (Location from Image) --- */}
+                            {singleOnProcessProject && isCollapsed && (
+                                <label 
+                                    // Only allow interaction if isAdmin is true
+                                    className={`flex items-center px-4 py-2 rounded-full cursor-pointer transition-all duration-200 shadow-lg 
+                                                ${isSingleProjectMarkedToday ? 'bg-green-500' : 'bg-white border border-gray-300 hover:bg-gray-200'}
+                                                ${!props.isAdmin ? 'cursor-default opacity-80' : ''}`}
+                                    onClick={props.isAdmin ? handleToggleTodayWorkingProjectGroup : (e) => e.stopPropagation()}
+                                >
+                                    <input 
+                                        type="checkbox"
+                                        className="sr-only"
+                                        checked={isSingleProjectMarkedToday}
+                                        readOnly
+                                    />
+                                    <span className={`text-xs font-bold ${isSingleProjectMarkedToday ? 'text-white' : 'text-gray-700'}`}>
+                                        Today Working
+                                    </span>
+                                </label>
+                            )}
+
+                            {/* Show summary badge if more than one project is 'on process' and marked for today */}
+                            {(!singleOnProcessProject || !isCollapsed) && todayWorkingCount > 0 && (
+                                <span className="px-3 py-1 rounded-full text-xs font-bold text-white bg-green-600 shadow-md">
+                                    {todayWorkingCount} ON TODAY
+                                </span>
+                            )}
+
+                            {/* Collapse Arrow */}
+                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 text-gray-500 transition-transform duration-200 ${isCollapsed ? '' : 'transform rotate-180'}`} viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                            </svg>
+                        </div>
+                    </div>
+                    {!isCollapsed && (
+                        <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {projects.map(project => (
+                                <ProjectCard key={project.id} project={project} {...props} />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const MotherCard = ({ projects, showAllVideos, setShowAllVideos, urgentProjectId, formatDateToDDMMYYYY }) => {
+            const totalActiveVideos = projects
+                .filter(project => project.status !== 'completed' && project.status !== 'dropped')
+                .reduce((sum, project) => sum + (project.videos?.length || 0), 0);
+            
+            const pendingVideosCount = projects
+                .filter(p => p.status !== 'completed' && p.status !== 'dropped')
+                .reduce((sum, p) => sum + (p.videos?.filter(v => v.status === 'Pending').length || 0), 0);
+            
+            const onProcessVideoCount = projects
+                .filter(p => p.status !== 'completed' && p.status !== 'dropped')
+                .reduce((sum, p) => sum + (p.videos?.filter(v => v.status === 'On Process').length || 0), 0);
+            
+            const upNextVideoCount = projects
+                .filter(p => p.status !== 'completed' && p.status !== 'dropped')
+                .reduce((sum, p) => sum + (p.videos?.filter(v => v.status === 'Up Next').length || 0), 0);
+
+            // Use the computed status for the mother card summary
+            const todayWorkingProjectCount = projects
+                .filter(p => p.status !== 'completed' && p.status !== 'dropped')
+                .filter(p => getProjectWorkingStatus(p)).length;
+
+            const urgentProject = projects.find(p => p.id === urgentProjectId);
+
+            return (
+                <div className="bg-white rounded-md shadow-lg border border-gray-200 p-5">
+                    <div className="flex flex-wrap items-center gap-2 mt-4">
+                        <button className="flex-1 min-w-[100px] bg-yellow-100 text-yellow-800 text-sm font-medium py-2 px-4 rounded-md">
+                            Total Videos: {totalActiveVideos}
+                        </button>
+                        <button className="flex-1 min-w-[100px] bg-gray-100 text-gray-800 text-sm font-medium py-2 px-4 rounded-md">
+                            Pending: {pendingVideosCount}
+                        </button>
+                        <button className="flex-1 min-w-[100px] bg-blue-100 text-blue-800 text-sm font-medium py-2 px-4 rounded-md">
+                            On Process: {onProcessVideoCount}
+                        </button>
+                        <button className="flex-1 min-w-[100px] bg-indigo-100 text-indigo-800 text-sm font-medium py-2 px-4 rounded-md">
+                            Up Next: {upNextVideoCount}
+                        </button>
+                        <button className="flex-1 min-w-[100px] bg-yellow-200 text-yellow-900 text-sm font-medium py-2 px-4 rounded-md">
+                            Today Working (Projects): {todayWorkingProjectCount}
+                        </button>
+                    </div>
+                    
+                    {urgentProjectId && urgentProject && (
+                        <div className="mt-6 border-2 border-red-500 rounded-md p-4 bg-red-50 flex items-center justify-between gap-4 animate-pulse">
+                            <span className="text-lg font-bold text-red-700">🚨 URGENT PROJECT: {urgentProject.projectName}</span>
+                            <span className="text-sm font-semibold text-gray-800">
+                                Client: {urgentProject.clientName}
+                            </span>
+                        </div>
+                    )}
+                    
+                    <button 
+                        className="w-full mt-4 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors duration-200"
+                        onClick={() => setShowAllVideos(!showAllVideos)}
+                    >
+                        Click to {showAllVideos ? 'hide' : 'view'} all videos.
+                    </button>
+
+                    {showAllVideos && (
+                        <div className="mt-4 border-t border-gray-200 pt-4">
+                            <ProjectsTable
+                                projects={projects}
+                                formatDateToDDMMYYYY={formatDateToDDMMYYYY}
+                            />
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ProjectsTable = ({ projects, formatDateToDDMMYYYY }) => {
+            const sortedProjects = [...projects].sort((a, b) => {
+                const statusOrder = { 'on process': 1, 'up next': 2, 'on hold': 3, 'completed': 4, 'dropped': 5 };
+                return (statusOrder[a.status] || 99) - (statusOrder[b.status] || 99);
+            });
+
+            return (
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200 rounded-md overflow-hidden">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project Name</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Client</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Shoot Date</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Deadline</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Note</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {sortedProjects.map(project => (
+                                <tr key={project.id} className={`${project.isUrgent ? 'bg-red-50' : 'hover:bg-gray-50'} transition duration-150`}>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.projectName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{project.clientName || 'N/A'}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatDateToDDMMYYYY(project.shootDay)}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatDateToDDMMYYYY(project.deadline)}</td>
+                                    <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px] truncate">{project.note || 'None'}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">
+                                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium text-white
+                                            ${project.status === 'completed' ? 'bg-green-500' : ''}
+                                            ${project.status === 'dropped' ? 'bg-red-500' : ''}
+                                            ${project.status === 'on hold' ? 'bg-orange-500' : ''}
+                                            ${project.status === 'up next' ? 'bg-indigo-500' : ''}
+                                            ${project.status === 'on process' ? 'bg-yellow-500' : ''}
+                                        `}>
+                                            {project.status}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        };
+
+        const ProjectCard = ({ project, calculateDaysAfterShoot, calculateRemainingDays, formatDateToDDMMYYYY, formatDateTime, onUpdateStatus, onEditProject, onApproveStatusChange, onRejectStatusChange, onDeleteProject, onMarkUrgent, onClearUrgent, isAdmin, isUrgentAdmin, isEditor, urgentProjectId, clients, onUpdateVideoStatus }) => {
+            const [isEditing, setIsEditing] = React.useState(false);
+            const [editedProjectName, setEditedProjectName] = React.useState(project.projectName);
+            const [editedNote, setEditedNote] = React.useState(project.note);
+            const [editedStatus, setEditedStatus] = React.useState(project.status);
+            const [editedClientName, setEditedClientName] = React.useState(project.clientName || '');
+            const [videos, setVideos] = React.useState(project.videos || []);
+            
+            // Get the computed status
+            const isMarkedToday = getProjectWorkingStatus(project);
+
+            React.useEffect(() => {
+                setEditedProjectName(project.projectName);
+                setEditedNote(project.note);
+                setEditedStatus(project.status);
+                setEditedClientName(project.clientName || '');
+                setVideos(project.videos || []);
+            }, [project]);
+
+            const getStatusDisplay = (status) => {
+                switch (status) {
+                    case 'completed': return { text: 'Completed', color: 'bg-green-500' };
+                    case 'dropped': return { text: 'Dropped', color: 'bg-red-500' };
+                    case 'on hold': return { text: 'On Hold', color: 'bg-orange-500' };
+                    case 'up next': return { text: 'Up Next', color: 'bg-indigo-500' };
+                    case 'on process':
+                    default: return { text: 'On Process', color: 'bg-yellow-500' };
+                }
+            };
+            
+            const getVideoStatusColor = (status) => {
+                switch (status) {
+                    case 'Completed': return 'text-green-500';
+                    case 'On Process': return 'text-yellow-500';
+                    case 'Dropped': return 'text-red-500';
+                    default: return 'text-gray-500';
+                }
+            };
+
+
+            const currentStatusDisplay = getStatusDisplay(project.status);
+            const requestedStatusDisplay = project.requestedStatus ? getStatusDisplay(project.requestedStatus) : null;
+            
+            // Highlight card based on computed status
+            const cardBackgroundColor = project.isUrgent ? 'bg-red-100' : ((project.status === 'completed' || project.status === 'dropped') ? 'bg-yellow-50' : 'bg-white');
+
+            const handleSaveEdit = () => {
+                const allVideosCompleted = videos.length > 0 && videos.every(video => video.status === 'Completed');
+                
+                let newProjectStatus = editedStatus;
+                
+                if (allVideosCompleted) {
+                    newProjectStatus = 'completed';
+                }
+
+                const updatedFields = { 
+                    note: editedNote, 
+                    clientName: editedClientName, 
+                    videos: videos,
+                    status: newProjectStatus
+                };
+                if (isAdmin) updatedFields.projectName = editedProjectName;
+                onEditProject(project.id, updatedFields);
+                setIsEditing(false);
+            };
+
+            const handleCancelEdit = () => {
+                setEditedProjectName(project.projectName);
+                setEditedNote(project.note);
+                setEditedStatus(project.status);
+                setEditedClientName(project.clientName || '');
+                setVideos(project.videos || []);
+                setIsEditing(false);
+            };
+
+            const handleVideoChange = (index, field, value) => {
+                const newVideos = [...videos];
+                newVideos[index][field] = value;
+                setVideos(newVideos);
+            };
+            
+            // Handler for the project-level 'Today Working' checkbox
+            const handleToggleTodayWorkingProject = (isChecked) => {
+                // This updates the project's root field 'isTodayWorking'
+                onEditProject(project.id, { isTodayWorking: isChecked });
+            };
+            
+            const handleAddVideo = () => {
+                setVideos([...videos, { name: '', type: 'Reels', status: 'Pending', isTodayWorking: false }]);
+            };
+
+            return (
+                <div className={`relative ${cardBackgroundColor} rounded-md border border-gray-200 p-4 pt-8 flex flex-col gap-3 ${isMarkedToday ? 'border-2 border-yellow-500 shadow-md' : ''}`}>
+                    
+                    {/* --- Project-level Today Working Checkbox (Top Right Corner) --- */}
+                    {project.status === 'on process' && (
+                        <div className="absolute top-0 right-0 z-10 -mt-3 -mr-3">
+                            <div className={`p-1.5 rounded-full shadow-lg transition-all duration-200 ${isMarkedToday ? 'bg-yellow-500' : 'bg-white border border-gray-300 hover:bg-gray-200'}`}>
+                                <label className={`flex items-center gap-1.5 cursor-pointer text-xs uppercase font-semibold select-none ${!isAdmin ? 'cursor-default' : ''}`}>
+                                    <input 
+                                        type="checkbox"
+                                        checked={isMarkedToday}
+                                        onChange={isAdmin ? (e) => handleToggleTodayWorkingProject(e.target.checked) : undefined}
+                                        onClick={!isAdmin ? (e) => e.preventDefault() : undefined} // Prevent click if not admin
+                                        className="sr-only" 
+                                    />
+                                    <span className={`font-bold px-2 py-0.5 rounded-full text-[10px] ${isMarkedToday ? 'text-gray-900 bg-white' : 'text-gray-700 bg-gray-100'} ${!isAdmin ? 'opacity-70' : ''}`}>
+                                        {isMarkedToday ? 'ON TODAY' : 'MARK TODAY'}
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    )}
+                    {/* --- End Project-level Checkbox --- */}
+
+                    {isEditing ? (
+                        <>
+                            {/* --- Editing Fields --- */}
+                            <div>
+                                <label htmlFor={`projectName-${project.id}`} className="block text-xs font-medium text-gray-700 mb-1">
+                                    Project Name
+                                </label>
+                                {isAdmin ? (
+                                    <input
+                                        type="text"
+                                        id={`projectName-${project.id}`}
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                        value={editedProjectName}
+                                        onChange={(e) => setEditedProjectName(e.target.value)}
+                                    />
+                                ) : (
+                                    <p className="text-sm font-medium text-gray-800">{project.projectName}</p>
+                                )}
+                            </div>
+                            <div>
+                                <label htmlFor={`clientName-${project.id}`} className="block text-xs font-medium text-gray-700 mb-1">
+                                    Client Name
+                                </label>
+                                {clients.length > 0 ? (
+                                    <select
+                                        id={`clientName-${project.id}`}
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                        value={editedClientName}
+                                        onChange={(e) => setEditedClientName(e.target.value)}
+                                    >
+                                        <option value="" disabled>Select an existing client</option>
+                                        {clients.map(client => (
+                                            <option key={client.id} value={client.clientName}>{client.clientName}</option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <input
+                                        type="text"
+                                        id={`clientName-${project.id}`}
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                        value={editedClientName}
+                                        onChange={(e) => setEditedClientName(e.target.value)}
+                                        placeholder="No clients found. Enter new client name."
+                                    />
+                                )}
+                            </div>
+                            <div>
+                                <label htmlFor={`note-${project.id}`} className="block text-xs font-medium text-gray-700 mb-1">
+                                    Note
+                                </label>
+                                <textarea
+                                    id="note"
+                                    rows="2"
+                                    className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500 resize-none"
+                                    value={editedNote}
+                                    onChange={(e) => setEditedNote(e.target.value)}
+                                ></textarea>
+                            </div>
+                            <div>
+                                <label htmlFor={`status-${project.id}`} className="block text-xs font-medium text-gray-700 mb-1">
+                                    Status
+                                </label>
+                                <select
+                                    id={`status-${project.id}`}
+                                    className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                    value={editedStatus}
+                                    onChange={(e) => setEditedStatus(e.target.value)}
+                                >
+                                    <option value="on process">On Process</option>
+                                    <option value="on hold">On Hold</option>
+                                    <option value="up next">Up Next</option>
+                                    <option value="dropped">Dropped</option>
+                                    <option value="completed">Completed</option>
+                                </select>
+                            </div>
+                            {videos.length > 0 && (
+                                <div className="border-t border-gray-200 pt-3 mt-3">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <p className="text-sm font-semibold text-gray-900">Videos</p>
+                                        <button onClick={handleAddVideo} className="bg-gray-200 hover:bg-gray-300 text-gray-800 text-xs font-medium py-1 px-2 rounded-md transition duration-200">
+                                            + Add Video
+                                        </button>
+                                    </div>
+                                    {videos.map((video, index) => (
+                                        <div key={index} className="flex flex-col md:flex-row gap-2 mb-2">
+                                            <input
+                                                type="text"
+                                                placeholder={`Video ${index + 1} Name`}
+                                                className="flex-1 p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={video.name}
+                                                onChange={(e) => handleVideoChange(index, 'name', e.target.value)}
+                                            />
+                                            <select
+                                                className="w-full md:w-1/4 p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={video.type}
+                                                onChange={(e) => handleVideoChange(index, 'type', e.target.value)}
+                                            >
+                                                <option value="Reels">Reels</option>
+                                                <option value="Long Format">Long Format</option>
+                                            </select>
+                                            <select
+                                                className="w-full md:w-1/4 p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={video.status}
+                                                onChange={(e) => handleVideoChange(index, 'status', e.target.value)}
+                                            >
+                                                <option value="Pending">Pending</option>
+                                                <option value="On Process">On Process</option>
+                                                <option value="Completed">Completed</option>
+                                                <option value="Dropped">Dropped</option>
+                                            </select>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <h3 className="text-base font-semibold text-gray-900">{project.projectName}</h3>
+                            <div className="text-xs text-gray-600 grid grid-cols-2 gap-x-2 gap-y-1">
+                                <p><span className="font-medium">Client:</span> {project.clientName || 'N/A'}</p>
+                                <p><span className="font-medium">Shoot Day:</span> {project.shootDay ? formatDateToDDMMYYYY(project.shootDay) : 'N/A'}</p>
+                                <p><span className="font-medium">Days After:</span> {calculateDaysAfterShoot(project.shootDay)}</p>
+                                <p><span className="font-medium">Deadline:</span> {project.deadline ? `${formatDateToDDMMYYYY(project.deadline)} - ${calculateRemainingDays(project.deadline)}` : 'No Deadline'}</p>
+                                {project.completedAt && (
+                                    <p><span className="font-medium">Completed:</span> {formatDateTime(project.completedAt)}</p>
+                                )}
+                                {project.droppedAt && (
+                                    <p><span className="font-medium">Dropped:</span> {formatDateTime(project.droppedAt)}</p>
+                                )}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${currentStatusDisplay.color}`}>
+                                    {currentStatusDisplay.text}
+                                </span>
+                                {project.requestedStatus && (
+                                    <span className={`px-2 py-0.5 rounded text-xs font-medium text-white bg-purple-500`}>
+                                        Pending: {requestedStatusDisplay.text}
+                                    </span>
+                                )}
+                                {project.isUrgent && (
+                                    <span className="px-2 py-0.5 rounded text-xs font-medium text-white bg-red-700 animate-pulse">
+                                        URGENT!
+                                    </span>
+                                )}
+                            </div>
+                            <p className="text-xs text-gray-600 break-words">
+                                <span className="font-medium">Note:</span> {project.note || 'None'}
+                            </p>
+                            {project.videos && project.videos.length > 0 && (
+                                <div className="border-t border-gray-200 pt-3 mt-3">
+                                    <p className="text-sm font-semibold text-gray-900 mb-2">Videos ({project.videos.length})</p>
+                                    <ul className="list-disc list-inside space-y-1 text-xs text-gray-600">
+                                        {project.videos.map((video, index) => (
+                                            <li key={index} className={`flex items-center justify-between transition-colors duration-150`}>
+                                                <div className="flex-1 min-w-0">
+                                                    <span className="font-medium">{video.name}</span> - {video.type}
+                                                    <span className={`ml-2 font-semibold ${getVideoStatusColor(video.status)}`}>
+                                                        ({video.status})
+                                                    </span>
+                                                    {video.isTodayWorking && <span className="ml-2 px-1 py-0.5 rounded-full text-[10px] font-bold bg-green-200 text-green-900">TODAY</span>}
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    <div className="flex justify-end gap-2 mt-auto flex-wrap">
+                        {isEditing ? (
+                            <>
+                                <button onClick={handleCancelEdit}
+                                    className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                    Cancel
+                                </button>
+                                <button onClick={handleSaveEdit}
+                                    className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                    Save
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                {isAdmin && project.requestedStatus && (
+                                    <>
+                                        <button onClick={() => onApproveStatusChange(project.id)}
+                                            className="bg-green-500 hover:bg-green-600 text-white text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Approve
+                                        </button>
+                                        <button onClick={() => onRejectStatusChange(project.id)}
+                                            className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Reject
+                                        </button>
+                                    </>
+                                )}
+                                {(isAdmin || isEditor) && (
+                                    <button onClick={() => setIsEditing(true)}
+                                        className="bg-gray-500 hover:bg-gray-600 text-white text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Edit
+                                    </button>
+                                )}
+                                {isAdmin && (
+                                    <button onClick={() => onDeleteProject(project.id)}
+                                        className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Delete
+                                    </button>
+                                )}
+                                {isUrgentAdmin && !project.isUrgent && urgentProjectId === null && (
+                                    <button onClick={() => onMarkUrgent(project.id)}
+                                        className="bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Mark Urgent
+                                    </button>
+                                )}
+                                {isUrgentAdmin && project.isUrgent && (
+                                    <button onClick={() => onClearUrgent(project.id)}
+                                        className="bg-green-700 hover:bg-green-800 text-white text-xs font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Clear Urgent
+                                    </button>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const AddProjectModal = ({ onClose, onAddProject, onAddClient, isAdmin, clients }) => {
+            const [step, setStep] = React.useState(1);
+            const [clientType, setClientType] = React.useState('existing');
+            const [newClientName, setNewClientName] = React.useState('');
+            const [selectedClientName, setSelectedClientName] = React.useState('');
+            const [projectName, setProjectName] = React.useState('');
+            const [shootDay, setShootDay] = React.useState('');
+            const [note, setNote] = React.useState('');
+            const [deadline, setDeadline] = React.useState('');
+            const [numberOfVideos, setNumberOfVideos] = React.useState(1);
+            const [videos, setVideos] = React.useState([{ name: '', type: 'Reels', status: 'Pending', isTodayWorking: false }]);
+            const [errorMessage, setErrorMessage] = React.useState('');
+            const [clientSearch, setClientSearch] = React.useState('');
+
+            const filteredClients = clients.filter(client =>
+                client.clientName.toLowerCase().includes(clientSearch.toLowerCase())
+            );
+
+            React.useEffect(() => {
+                if (clientType === 'existing' && filteredClients.length > 0) {
+                    if (!selectedClientName || !filteredClients.some(client => client.clientName === selectedClientName)) {
+                        setSelectedClientName(filteredClients[0].clientName);
+                    }
+                } else if (clientType === 'new') {
+                    setSelectedClientName('');
+                }
+            }, [clientType, filteredClients, selectedClientName]);
+
+
+            React.useEffect(() => {
+                if (step === 3) {
+                    const newVideos = Array.from({ length: numberOfVideos }, (_, i) => {
+                        const existingVideo = videos[i] || {};
+                        return { 
+                            name: existingVideo.name || '', 
+                            type: existingVideo.type || 'Reels', 
+                            status: existingVideo.status || 'Pending', 
+                            isTodayWorking: existingVideo.isTodayWorking || false // Initialize new field
+                        };
+                    });
+                    setVideos(newVideos);
+                }
+            }, [numberOfVideos, step]);
+
+            const handleClientStepSubmit = async (e) => {
+                e.preventDefault();
+                setErrorMessage('');
+                if (clientType === 'new') {
+                    if (!newClientName.trim()) {
+                        setErrorMessage('Client name is required.');
+                        return;
+                    }
+                    const result = await onAddClient(newClientName.trim());
+                    if (result.success) {
+                        setSelectedClientName(result.clientName);
+                        setStep(2);
+                    }
+                } else {
+                    if (!selectedClientName) {
+                        setErrorMessage('Please select a client.');
+                        return;
+                    }
+                    setStep(2);
+                }
+            };
+
+            const handleNumberOfVideosSubmit = (e) => {
+                e.preventDefault();
+                setErrorMessage('');
+                if (numberOfVideos < 1 || numberOfVideos === '' || isNaN(numberOfVideos)) {
+                    setErrorMessage('Number of videos must be at least 1.');
+                    return;
+                }
+                setStep(3);
+            };
+
+            const handleProjectStepSubmit = (e) => {
+                e.preventDefault();
+                setErrorMessage('');
+                if (!projectName.trim() || !shootDay.trim()) {
+                    setErrorMessage('Project Name and Shoot Day are required.');
+                    return;
+                }
+                
+                // Ensure isTodayWorking is explicitly set for persistence
+                const videosWithNames = videos.filter(v => v.name.trim() !== '').map(v => ({...v, isTodayWorking: v.isTodayWorking || false})); 
+                
+                if (videosWithNames.length === 0) {
+                     setErrorMessage('At least one video name must be provided.');
+                     return;
+                }
+
+                const newProject = {
+                    projectName: projectName.trim(),
+                    clientName: selectedClientName,
+                    shootDay: new Date(shootDay),
+                    note: note.trim(),
+                    deadline: deadline ? new Date(deadline) : null,
+                    videos: videosWithNames,
+                    isTodayWorking: false,
+                    lastMarkedToday: null,
+                };
+                onAddProject(newProject);
+                setStep(1);
+                setProjectName('');
+                setShootDay('');
+                setNote('');
+                setDeadline('');
+                setVideos([{ name: '', type: 'Reels', status: 'Pending', isTodayWorking: false }]);
+                setNumberOfVideos(1);
+                setSelectedClientName('');
+                setNewClientName('');
+                setErrorMessage('');
+            };
+            
+            const handleVideoChange = (index, field, value) => {
+                const newVideos = [...videos];
+                newVideos[index][field] = value;
+                setVideos(newVideos);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+                    <div className="bg-white rounded-md p-6 w-full max-w-md">
+                        <h2 className="text-xl font-semibold text-gray-900 mb-4 text-center">
+                            {step === 1 && 'Select Client'}
+                            {step === 2 && 'Number of Videos'}
+                            {step === 3 && 'Add Project Details'}
+                        </h2>
+                        {step === 1 && (
+                            <form onSubmit={handleClientStepSubmit}>
+                                <div className="flex flex-col gap-4 mb-4">
+                                    <div className="flex items-center">
+                                        <input type="radio" id="existingClient" name="clientType" value="existing"
+                                            checked={clientType === 'existing'} onChange={(e) => setClientType(e.target.value)}
+                                            className="h-4 w-4 text-yellow-500 focus:ring-yellow-500 border-gray-300"
+                                        />
+                                        <label htmlFor="existingClient" className="ml-2 text-sm text-gray-700 font-medium">
+                                            Existing Client
+                                        </label>
+                                    </div>
+                                    {clientType === 'existing' && (
+                                        <>
+                                            <input
+                                                type="text"
+                                                id="clientSearchInput"
+                                                placeholder="Search clients..."
+                                                className="w-full p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={clientSearch}
+                                                onChange={(e) => setClientSearch(e.target.value)}
+                                            />
+                                            <select
+                                                id="clientNameSelect"
+                                                className="w-full p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={selectedClientName} onChange={(e) => setSelectedClientName(e.target.value)}
+                                                disabled={filteredClients.length === 0}
+                                            >
+                                                <option value="">Select a client</option>
+                                                {filteredClients.map(client => (
+                                                    <option key={client.id} value={client.clientName}>{client.clientName}</option>
+                                                ))}
+                                            </select>
+                                        </>
+                                    )}
+                                    <div className="flex items-center">
+                                        <input type="radio" id="newClient" name="clientType" value="new"
+                                            checked={clientType === 'new'} onChange={(e) => setClientType(e.target.value)}
+                                            className="h-4 w-4 text-yellow-500 focus:ring-yellow-500 border-gray-300"
+                                        />
+                                        <label htmlFor="newClient" className="ml-2 text-sm text-gray-700 font-medium">
+                                            New Client
+                                        </label>
+                                    </div>
+                                    {clientType === 'new' && (
+                                        <input type="text" id="newClientNameInput" placeholder="Enter new client name"
+                                            className="w-full p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                            value={newClientName} onChange={(e) => setNewClientName(e.target.value)}
+                                        />
+                                    )}
+                                </div>
+                                {errorMessage && (
+                                    <p className="text-red-500 text-xs mb-3 text-center">{errorMessage}</p>
+                                )}
+                                <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={onClose}
+                                        className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Cancel
+                                    </button>
+                                    <button type="submit"
+                                        className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Next
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                        {step === 2 && (
+                            <form onSubmit={handleNumberOfVideosSubmit}>
+                                <div className="mb-3">
+                                    <p className="block text-sm font-semibold text-gray-900 mb-2">
+                                        Client: <span className="font-normal">{selectedClientName}</span>
+                                    </p>
+                                    <label htmlFor="numberOfVideos" className="block text-xs font-medium text-gray-700 mb-1">
+                                        Number of Videos
+                                    </label>
+                                    <input type="number" id="numberOfVideos"
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                        value={numberOfVideos} 
+                                        onChange={(e) => setNumberOfVideos(e.target.value === '' ? '' : parseInt(e.target.value, 10))} 
+                                        required min="1"
+                                    />
+                                </div>
+                                {errorMessage && (
+                                    <p className="text-red-500 text-xs mb-3 text-center">{errorMessage}</p>
+                                )}
+                                <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={() => setStep(1)}
+                                        className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Back
+                                    </button>
+                                    <button type="submit"
+                                        className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Next
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                        {step === 3 && (
+                            <form onSubmit={handleProjectStepSubmit}>
+                                <div className="mb-3">
+                                    <p className="block text-sm font-semibold text-gray-900 mb-2">
+                                        Client: <span className="font-normal">{selectedClientName}</span>
+                                    </p>
+                                </div>
+                                <div className="mb-3">
+                                    <label htmlFor="projectName" className="block text-xs font-medium text-gray-700 mb-1">
+                                        Project Name
+                                    </label>
+                                    <input type="text" id="projectName"
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                        value={projectName} onChange={(e) => setProjectName(e.target.value)} required
+                                    />
+                                </div>
+                                <div className="mb-3">
+                                    <label htmlFor="shootDay" className="block text-xs font-medium text-gray-700 mb-1">
+                                        Shoot Day
+                                    </label>
+                                    <input type="date" id="shootDay"
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                        value={shootDay} onChange={(e) => setShootDay(e.target.value)} max={getTodayDate()} required
+                                    />
+                                </div>
+                                {isAdmin && (
+                                    <div className="mb-3">
+                                        <label htmlFor="deadline" className="block text-xs font-medium text-gray-700 mb-1">
+                                            Deadline (Optional)
+                                        </label>
+                                        <input type="date" id="deadline"
+                                            className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                            value={deadline} onChange={(e) => setDeadline(e.target.value)}
+                                        />
+                                    </div>
+                                )}
+                                <div className="mb-3">
+                                    <label htmlFor="note" className="block text-xs font-medium text-gray-700 mb-1">
+                                        Note
+                                    </label>
+                                    <textarea id="note" rows="2"
+                                        className="w-full p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500 resize-none"
+                                        value={note} onChange={(e) => setNote(e.target.value)}
+                                    ></textarea>
+                                </div>
+                                <div className="border-t border-gray-200 pt-3 mt-3">
+                                    <p className="text-sm font-semibold text-gray-900 mb-2">Video Details</p>
+                                    {videos.map((video, index) => (
+                                        <div key={index} className="flex flex-col md:flex-row gap-2 mb-2">
+                                            <input
+                                                type="text"
+                                                placeholder={`Video ${index + 1} Name`}
+                                                className="flex-1 p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={video.name}
+                                                onChange={(e) => handleVideoChange(index, 'name', e.target.value)}
+                                            />
+                                            <select
+                                                className="w-full md:w-1/3 p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={video.type}
+                                                onChange={(e) => handleVideoChange(index, 'type', e.target.value)}
+                                            >
+                                                <option value="Reels">Reels</option>
+                                                <option value="Long Format">Long Format</option>
+                                            </select>
+                                            <select
+                                                className="w-full md:w-1/3 p-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                                value={video.status}
+                                                onChange={(e) => handleVideoChange(index, 'status', e.target.value)}
+                                            >
+                                                <option value="Pending">Pending</option>
+                                                <option value="On Process">On Process</option>
+                                                <option value="Completed">Completed</option>
+                                                <option value="Dropped">Dropped</option>
+                                            </select>
+                                        </div>
+                                    ))}
+                                </div>
+                                {errorMessage && (
+                                    <p className="text-red-500 text-xs mb-3 text-center">{errorMessage}</p>
+                                )}
+                                <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={() => setStep(2)}
+                                        className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Back
+                                    </button>
+                                    <button type="submit"
+                                        className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                        Add Project
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+        
+        const ManageClientsModal = ({ onClose, clients, onAddClient, onDeleteClient }) => {
+            const [newClientName, setNewClientName] = React.useState('');
+            const [showDeleteConfirmation, setShowDeleteConfirmation] = React.useState(false);
+            const [clientToDelete, setClientToDelete] = React.useState(null);
+
+            const handleAddClientSubmit = async (e) => {
+                e.preventDefault();
+                if (newClientName.trim()) {
+                    await onAddClient(newClientName.trim());
+                    setNewClientName('');
+                }
+            };
+            
+            const handleConfirmDelete = () => {
+                if (clientToDelete) {
+                    onDeleteClient(clientToDelete);
+                    setShowDeleteConfirmation(false);
+                    setClientToDelete(null);
+                }
+            };
+
+            const handleCancelDelete = () => {
+                setShowDeleteConfirmation(false);
+                setClientToDelete(null);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+                    <div className="bg-white rounded-md p-6 w-full max-w-md">
+                        <h2 className="text-xl font-semibold text-gray-900 mb-4 text-center">Manage Clients</h2>
+                        <div className="max-h-60 overflow-y-auto mb-4">
+                            {clients.length === 0 ? (
+                                <p className="text-center text-gray-500 text-sm">No clients found.</p>
+                            ) : (
+                                <ul className="divide-y divide-gray-200">
+                                    {clients.map(client => (
+                                        <li key={client.id} className="flex items-center justify-between py-2">
+                                            <span className="text-gray-800 font-medium">{client.clientName}</span>
+                                            <button
+                                                onClick={() => { setClientToDelete(client.id); setShowDeleteConfirmation(true); }}
+                                                className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1 px-2 rounded-md transition duration-200"
+                                            >
+                                                Delete
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                        <form onSubmit={handleAddClientSubmit} className="flex gap-2">
+                            <input
+                                type="text"
+                                placeholder="Add new client..."
+                                className="flex-1 p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                value={newClientName}
+                                onChange={(e) => setNewClientName(e.target.value)}
+                            />
+                            <button
+                                type="submit"
+                                className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200"
+                            >
+                                Add
+                            </button>
+                        </form>
+                        <div className="flex justify-end mt-4">
+                            <button
+                                onClick={onClose}
+                                className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                    {showDeleteConfirmation && (
+                        <DeleteConfirmationModal
+                            onConfirm={handleConfirmDelete}
+                            onCancel={handleCancelDelete}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        const DeleteConfirmationModal = ({ onConfirm, onCancel }) => {
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-md p-6 w-full max-w-sm">
+                        <h3 className="text-lg font-semibold text-red-600 mb-2">Confirm Deletion</h3>
+                        <p className="text-sm text-gray-700 mb-4">Are you sure you want to delete this client? This action cannot be undone.</p>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={onCancel}
+                                className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                Cancel
+                            </button>
+                            <button onClick={onConfirm}
+                                className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                Confirm
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const LoginModal = ({ onClose, onLogin }) => {
+            const [password, setPassword] = React.useState('');
+            const [error, setError] = React.useState('');
+
+            const handleLoginAttempt = () => {
+                onLogin(password);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-md p-6 w-full max-w-sm">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-4 text-center">Login</h3>
+                        <div className="mb-4">
+                            <input
+                                type="password"
+                                placeholder="Enter password"
+                                className="w-full p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                                value={password}
+                                onChange={(e) => {
+                                    setPassword(e.target.value);
+                                    setError('');
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleLoginAttempt();
+                                }}
+                            />
+                            {error && <p className="text-red-500 text-xs mt-2 text-center">{error}</p>}
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={onClose}
+                                className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                Cancel
+                            </button>
+                            <button onClick={handleLoginAttempt}
+                                className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                Login
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const EditorWorkModal = ({ onClose, isEditor, isAdmin, projects, userId, db, showMessage, onUpdateVideoStatus }) => {
+            const [allWorkSessions, setAllWorkSessions] = React.useState([]);
+            const [isLoading, setIsLoading] = React.useState(true);
+            const [selectedVideo, setSelectedVideo] = React.useState(null);
+            const [groupedVideos, setGroupedVideos] = React.useState({});
+            const [editorName, setEditorName] = React.useState('');
+            const [isEditingWork, setIsEditingWork] = React.useState(false);
+            const [editableWork, setEditableWork] = React.useState(null);
+            const [sessionToDelete, setSessionToDelete] = React.useState(null);
+            const [clientSearch, setClientSearch] = React.useState('');
+
+            React.useEffect(() => {
+                if (!db || !userId) return;
+                
+                const fetchEditorName = async () => {
+                    const editorDocRef = doc(db, `artifacts/${__app_id}/public/data/editorProfiles`, userId);
+                    const docSnap = await getDoc(editorDocRef);
+                    if (docSnap.exists()) {
+                        setEditorName(docSnap.data().name);
+                    }
+                };
+                fetchEditorName();
+
+                setIsLoading(true);
+                const editorWorkSessionsRef = collection(db, `artifacts/${__app_id}/public/data/editorWorkSessions`);
+                const q = query(editorWorkSessionsRef);
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const sessions = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data(),
+                        startTime: doc.data().startTime?.toDate?.(),
+                        endTime: doc.data().endTime?.toDate?.(),
+                    }));
+                    setAllWorkSessions(sessions);
+                    setIsLoading(false);
+                }, (error) => {
+                    showMessage(`Error fetching work sessions: ${error.message}`, "error");
+                    setIsLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, [db, userId, showMessage]);
+
+            const myCurrentWorkSessions = React.useMemo(() => allWorkSessions.filter(s => s.editorId === userId && s.status === 'on-going'), [allWorkSessions, userId]);
+            const myOnHoldSessions = React.useMemo(() => allWorkSessions.filter(s => s.editorId === userId && s.status === 'on-hold'), [allWorkSessions, userId]);
+
+            React.useEffect(() => {
+                const allActiveVideoIds = new Set(
+                    allWorkSessions
+                        .filter(s => s.status === 'on-going' || s.status === 'on-hold')
+                        .flatMap(s => s.videos ? s.videos.map(v => `${v.projectId}-${v.index}`) : [])
+                );
+
+                const newGroupedVideos = projects.reduce((acc, project) => {
+                    if (Array.isArray(project.videos)) {
+                        project.videos
+                            .map((video, index) => ({ ...video, index }))
+                            .filter(video => 
+                                (video.status !== 'Completed' && video.status !== 'Dropped') &&
+                                !allActiveVideoIds.has(`${project.id}-${video.index}`)
+                            )
+                            .forEach(video => {
+                                const clientName = project.clientName || 'Unassigned Client';
+                                if (!acc[clientName]) acc[clientName] = {};
+                                const projectName = project.projectName || 'Unassigned Project';
+                                if (!acc[clientName][projectName]) acc[clientName][projectName] = [];
+                                acc[clientName][projectName].push({
+                                    ...video,
+                                    projectId: project.id,
+                                    projectName: project.projectName,
+                                    clientName: project.clientName,
+                                });
+                            });
+                    }
+                    return acc;
+                }, {});
+                setGroupedVideos(newGroupedVideos);
+            }, [projects, allWorkSessions]);
+
+            const handleStartWork = async () => {
+                if (!selectedVideo || !editorName.trim()) {
+                    showMessage("Please select a video and enter your name.", "error");
+                    return;
+                }
+
+                try {
+                    const editorDocRef = doc(db, `artifacts/${__app_id}/public/data/editorProfiles`, userId);
+                    await setDoc(editorDocRef, { name: editorName.trim() }, { merge: true });
+
+                    await addDoc(collection(db, `artifacts/${__app_id}/public/data/editorWorkSessions`), {
+                        editorId: userId,
+                        editorName: editorName.trim(),
+                        startTime: serverTimestamp(),
+                        status: 'on-going',
+                        videos: [{ 
+                            projectId: selectedVideo.projectId,
+                            projectName: selectedVideo.projectName,
+                            clientName: selectedVideo.clientName,
+                            index: selectedVideo.index, 
+                            name: selectedVideo.name, 
+                            type: selectedVideo.type 
+                        }],
+                    });
+
+                    await onUpdateVideoStatus(selectedVideo.projectId, selectedVideo.index, 'On Process');
+                    showMessage(`Started work on "${selectedVideo.name}"`, "success");
+                    setSelectedVideo(null);
+                } catch (error) {
+                    showMessage(`Error starting work session: ${error.message}`, "error");
+                }
+            };
+
+            const handleResumeWork = async (session) => {
+                try {
+                    const workSessionRef = doc(db, `artifacts/${__app_id}/public/data/editorWorkSessions`, session.id);
+                    await updateDoc(workSessionRef, { status: 'on-going' });
+
+                    for (const video of session.videos) {
+                        await onUpdateVideoStatus(video.projectId, video.index, 'On Process');
+                    }
+                    showMessage(`Resumed work on "${session.videos[0].projectName}"`, "success");
+                } catch (error) {
+                    showMessage(`Error resuming work: ${error.message}`, "error");
+                }
+            };
+            
+            const handleCopyToClipboard = (session) => {
+                if (!session || !session.videos || session.videos.length === 0) return;
+            
+                const { startTime, endTime, editorName, videos, status } = session;
+                const isCompleted = status === 'completed' || !!endTime;
+                const finalEndTime = endTime || new Date();
+            
+                const projectsInSession = videos.reduce((acc, video) => {
+                    const key = `${video.clientName} (${video.projectName})`;
+                    if (!acc[key]) {
+                        acc[key] = new Set();
+                    }
+                    acc[key].add(video.type);
+                    return acc;
+                }, {});
+            
+                const projectDetails = Object.entries(projectsInSession)
+                    .map(([name, types]) => `${name} / ${Array.from(types).join(', ')}`)
+                    .join(' & ');
+            
+                let report = `Quick update on Editing work: ${formatDateToDDMMYYYY(new Date())} ( ${videos.length} Video${videos.length > 1 ? 's' : ''} )\n\n`;
+                report += `1. Current Project: ${projectDetails}\n`;
+                report += `2. Editing Started Time: [${formatDateTime(startTime)}]\n`;
+            
+                if (isCompleted) {
+                    report += `3. Editing Completed Time: [${formatDateTime(finalEndTime)}]\n`;
+                    report += `4. Total Time Taken For the Project: ${calculateTimeDifference(startTime, finalEndTime)}\n`;
+                } else {
+                    report += `3. Days on Project: ${calculateDaysAfterShoot(startTime)} days\n`;
+                    report += `4. Time Elapsed: ${calculateTimeDifference(startTime, null)}\n`;
+                }
+            
+                report += `${isCompleted ? '5' : '5'}. Edited By: ${editorName}\n`;
+                report += `${isCompleted ? '6' : '6'}. Status: ${isCompleted ? 'Completed' : 'On process'}`;
+            
+                const textarea = document.createElement('textarea');
+                textarea.value = report;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showMessage("Report copied to clipboard!", "success");
+            };
+            
+            const handleCopyCombinedReport = () => {
+                if (myCurrentWorkSessions.length === 0) return;
+            
+                const allVideos = myCurrentWorkSessions.flatMap(s => s.videos);
+                const earliestStartTime = myCurrentWorkSessions.reduce((earliest, session) => {
+                    return session.startTime < earliest ? session.startTime : earliest;
+                }, myCurrentWorkSessions[0].startTime);
+            
+                const combinedSession = {
+                    ...myCurrentWorkSessions[0],
+                    startTime: earliestStartTime,
+                    videos: allVideos,
+                    status: 'on-going',
+                    endTime: null,
+                };
+            
+                handleCopyToClipboard(combinedSession);
+            };
+
+            const handleEndWork = async (session) => {
+                try {
+                    // First, copy the report text to the clipboard with final details.
+                    handleCopyToClipboard({ ...session, endTime: new Date(), status: 'completed' });
+            
+                    // Then, update the session in Firestore.
+                    const workSessionRef = doc(db, `artifacts/${__app_id}/public/data/editorWorkSessions`, session.id);
+                    await updateDoc(workSessionRef, { endTime: serverTimestamp(), status: 'completed' });
+                    
+                    // Update the status of all associated videos.
+                    for (const video of session.videos) {
+                        await onUpdateVideoStatus(video.projectId, video.index, 'Completed');
+                    }
+                } catch (error) {
+                    showMessage(`Error ending work session: ${error.message}`, "error");
+                }
+            };
+
+            const handleHoldWork = async (session) => {
+                try {
+                    const workSessionRef = doc(db, `artifacts/${__app_id}/public/data/editorWorkSessions`, session.id);
+                    await updateDoc(workSessionRef, { status: 'on-hold' });
+                    for (const video of session.videos) {
+                        await onUpdateVideoStatus(video.projectId, video.index, 'On Hold');
+                    }
+                    showMessage(`Session is now on hold.`, "success");
+                } catch (error) {
+                    showMessage(`Error putting session on hold: ${error.message}`, "error");
+                }
+            };
+
+            const confirmDeleteSession = async () => {
+                if (!sessionToDelete) return;
+                try {
+                    const workSessionRef = doc(db, `artifacts/${__app_id}/public/data/editorWorkSessions`, sessionToDelete.id);
+                    await deleteDoc(workSessionRef);
+
+                    if (sessionToDelete.status !== 'completed') {
+                        for (const video of sessionToDelete.videos) {
+                            await onUpdateVideoStatus(video.projectId, video.index, 'Pending');
+                        }
+                    }
+                    showMessage("Session deleted successfully.", "success");
+                } catch (error) {
+                    showMessage(`Error deleting session: ${error.message}`, "error");
+                } finally {
+                    setSessionToDelete(null);
+                }
+            };
+            
+            const handleEditWork = (session) => {
+                const startTimeForInput = new Date(session.startTime.getTime() - (session.startTime.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
+                setEditableWork({
+                    ...session,
+                    startTime: startTimeForInput,
+                });
+                setIsEditingWork(true);
+            };
+
+            const handleSaveWorkEdit = async () => {
+                if (!editableWork.editorName || !editableWork.startTime) {
+                    showMessage("Editor name and start time cannot be empty.", "error");
+                    return;
+                }
+                try {
+                    const workSessionRef = doc(db, `artifacts/${__app_id}/public/data/editorWorkSessions`, editableWork.id);
+                    await updateDoc(workSessionRef, {
+                        editorName: editableWork.editorName,
+                        startTime: new Date(editableWork.startTime),
+                    });
+                    showMessage("Work session updated.", "success");
+                    setIsEditingWork(false);
+                    setEditableWork(null);
+                } catch (error) {
+                    showMessage(`Error updating work session: ${error.message}`, "error");
+                }
+            };
+
+            const renderReadOnlyView = () => (
+                <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-gray-800 border-b pb-2">Ongoing Work Sessions</h3>
+                    {isLoading ? <p>Loading sessions...</p> : allWorkSessions.filter(s => s.status === 'on-going').length > 0 ? (
+                        allWorkSessions.filter(s => s.status === 'on-going').map(session => (
+                            <div key={session.id} className="bg-gray-50 border rounded-md p-3 flex justify-between items-start">
+                                <div>
+                                    {session.videos && session.videos.length > 0 ? (
+                                        <>
+                                            <p className="font-bold">{session.videos[0].projectName} ({session.videos[0].clientName})</p>
+                                            <p className="text-sm"><span className="font-medium">Editor:</span> {session.editorName}</p>
+                                            <p className="text-sm"><span className="font-medium">Started:</span> {formatDateTime(session.startTime)}</p>
+                                            <ul className="list-disc list-inside pl-4 text-sm mt-1">
+                                                {session.videos.map((v, i) => <li key={i}>{v.name}</li>)}
+                                            </ul>
+                                        </>
+                                    ) : (
+                                        <p className="text-gray-500">Session data is incomplete.</p>
+                                    )}
+                                </div>
+                                {isAdmin && (
+                                     <button onClick={() => setSessionToDelete(session)} className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 px-3 rounded-md">Delete</button>
+                                )}
+                            </div>
+                        ))
+                    ) : (
+                        <p className="text-gray-500 text-center py-4">No active work sessions right now.</p>
+                    )}
+                </div>
+            );
+
+            const renderEditorView = () => {
+                const filteredGroupedVideos = Object.entries(groupedVideos)
+                    .filter(([clientName]) => clientName.toLowerCase().includes(clientSearch.toLowerCase()))
+                    .reduce((acc, [clientName, projectsByClient]) => {
+                        acc[clientName] = projectsByClient;
+                        return acc;
+                    }, {});
+
+                return (
+                    <>
+                        {myCurrentWorkSessions.length > 0 && (
+                            <div className="mb-4">
+                                <div className="flex justify-between items-center mb-2">
+                                    <h3 className="text-md font-semibold text-gray-700">My Active Sessions</h3>
+                                    {myCurrentWorkSessions.length > 1 && (
+                                        <button onClick={handleCopyCombinedReport} className="bg-purple-500 hover:bg-purple-600 text-white text-xs font-medium py-1.5 px-3 rounded-md">
+                                            Copy Combined Report
+                                        </button>
+                                    )}
+                                </div>
+                                {myCurrentWorkSessions.map(session => (
+                                    <div key={session.id} className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-2">
+                                        {isEditingWork && editableWork?.id === session.id ? (
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700">Editor Name</label>
+                                                    <input type="text" value={editableWork.editorName} onChange={e => setEditableWork({...editableWork, editorName: e.target.value})} className="w-full p-1.5 border border-gray-300 rounded-md text-sm"/>
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-medium text-gray-700">Start Time</label>
+                                                    <input type="datetime-local" value={editableWork.startTime} onChange={e => setEditableWork({...editableWork, startTime: e.target.value})} className="w-full p-1.5 border border-gray-300 rounded-md text-sm"/>
+                                                </div>
+                                                <div className="flex justify-end gap-2">
+                                                    <button onClick={() => setIsEditingWork(false)} className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md">Cancel</button>
+                                                    <button onClick={handleSaveWorkEdit} className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md">Save</button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <p className="text-sm text-gray-800"><span className="font-semibold">Editor:</span> {session.editorName}</p>
+                                                <p className="text-sm text-gray-800"><span className="font-semibold">Start Time:</span> {formatDateTime(session.startTime)}</p>
+                                                <div className="mt-2">
+                                                    <p className="text-sm font-semibold text-gray-800">Videos ({session.videos.length}):</p>
+                                                    <ul className="list-disc list-inside pl-5 text-sm text-gray-700">
+                                                        {session.videos.map((v, i) => <li key={i}>{v.name} ({v.projectName})</li>)}
+                                                    </ul>
+                                                </div>
+                                                <div className="flex justify-end flex-wrap gap-2 mt-3">
+                                                    <button onClick={() => handleEditWork(session)} className="bg-gray-400 hover:bg-gray-500 text-white text-xs font-medium py-1.5 px-3 rounded-md">Edit</button>
+                                                    {myCurrentWorkSessions.length === 1 && (
+                                                        <button onClick={() => handleCopyToClipboard(session)} className="bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium py-1.5 px-3 rounded-md">Copy Report</button>
+                                                    )}
+                                                    <button onClick={() => handleHoldWork(session)} className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium py-1.5 px-3 rounded-md">On Hold</button>
+                                                    <button onClick={() => handleEndWork(session)} className="bg-green-500 hover:bg-green-600 text-white text-xs font-medium py-1.5 px-3 rounded-md">Mark Completed</button>
+                                                    <button onClick={() => setSessionToDelete(session)} className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 px-3 rounded-md">Delete</button>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        
+                        <div className="space-y-4">
+                            {myOnHoldSessions.length > 0 && (
+                                <div className="mb-4">
+                                    <h3 className="text-md font-semibold text-gray-700 mb-2">My On Hold Sessions</h3>
+                                    <div className="space-y-2">
+                                        {myOnHoldSessions.map(session => (
+                                            <div key={session.id} className="bg-orange-50 border border-orange-200 rounded-md p-3 flex items-center justify-between">
+                                                <div>
+                                                    <p className="font-semibold">{session.videos[0].projectName}</p>
+                                                    <p className="text-xs text-gray-600">Started: {formatDateTime(session.startTime)}</p>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={() => handleResumeWork(session)} className="bg-orange-500 hover:bg-orange-600 text-white font-medium py-1 px-3 rounded-md text-sm">Resume</button>
+                                                    <button onClick={() => setSessionToDelete(session)} className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1 px-2 rounded-md">Delete</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                             <input
+                                type="text"
+                                placeholder="Search by client name..."
+                                value={clientSearch}
+                                onChange={(e) => setClientSearch(e.target.value)}
+                                className="w-full p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                            />
+                            <div className="mb-4 max-h-60 overflow-y-auto border border-gray-200 rounded-md p-3 bg-gray-50">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">Start a new session:</label>
+                                {Object.keys(filteredGroupedVideos).length === 0 ? (
+                                    <p className="text-sm text-gray-500 px-2 py-4 text-center">No available videos for the selected client.</p>
+                                ) : (
+                                    Object.entries(filteredGroupedVideos).map(([clientName, projectsByClient]) => (
+                                        <div key={clientName} className="mb-3">
+                                            <p className="font-bold text-gray-900 bg-gray-200 px-3 py-1.5 rounded-t-md text-base">{clientName}</p>
+                                            <div className="bg-white border border-t-0 border-gray-200 rounded-b-md p-2">
+                                            {Object.entries(projectsByClient).map(([projectName, videosInProject]) => (
+                                                <div key={`${clientName}-${projectName}`} className="ml-2 mb-2">
+                                                    <p className="font-semibold text-gray-800 mt-1 ml-2 text-sm">{projectName}</p>
+                                                    <div className="pl-4 mt-1 space-y-1">
+                                                        {videosInProject.map((video) => (
+                                                            <label key={`${video.projectId}-${video.index}`} className="flex items-center gap-3 p-2 text-sm text-gray-700 rounded-md transition-colors duration-150 cursor-pointer hover:bg-yellow-50">
+                                                                <input type="radio" name="video-selection" value={`${video.projectId}-${video.index}`} checked={selectedVideo?.index === video.index && selectedVideo?.projectId === video.projectId} onChange={() => setSelectedVideo(video)} className="h-4 w-4 text-yellow-600 focus:ring-yellow-500 border-gray-300"/>
+                                                                <span>{video.name} ({video.type}) - <span className="font-medium">{video.status}</span></span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                            <div>
+                                <label htmlFor="editorName" className="block text-sm font-medium text-gray-700 mb-1">Enter Your Name:</label>
+                                <input type="text" id="editorName" value={editorName} onChange={e => setEditorName(e.target.value)} placeholder="e.g., Prabhakaran" className="w-full p-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"/>
+                            </div>
+                            {selectedVideo && (
+                                <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-4">
+                                    <div className="flex justify-end gap-2 mt-3">
+                                        <button onClick={handleStartWork} className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">Start New Work Session</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </>
+                );
+            };
+
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+                    <div className="bg-white rounded-md p-6 w-full max-w-2xl">
+                        <h2 className="text-xl font-semibold text-gray-900 mb-4 text-center">
+                            {isEditor ? "My Work" : "Today's Work Sessions"}
+                        </h2>
+                        
+                        {isEditor ? renderEditorView() : renderReadOnlyView()}
+
+                        <div className="flex justify-end gap-2 mt-6">
+                            <button onClick={onClose} className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                Close
+                            </button>
+                        </div>
+                        {sessionToDelete && (
+                            <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+                                <div className="bg-white rounded-md p-6 w-full max-w-sm">
+                                    <h3 className="text-lg font-semibold text-red-600 mb-2">Confirm Deletion</h3>
+                                    <p className="text-sm text-gray-700 mb-4">Are you sure you want to delete this session? This action cannot be undone.</p>
+                                    <div className="flex justify-end gap-2">
+                                        <button onClick={() => setSessionToDelete(null)}
+                                            className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Cancel
+                                        </button>
+                                        <button onClick={confirmDeleteSession}
+                                            className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Confirm
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+        
+        const WorkLogsModal = ({ onClose, isAdmin, db, showMessage }) => {
+            const [allSessions, setAllSessions] = React.useState([]);
+            const [filteredSessions, setFilteredSessions] = React.useState([]);
+            const [isLoading, setIsLoading] = React.useState(true);
+            const [filterEditor, setFilterEditor] = React.useState('');
+            const [filterStartDate, setFilterStartDate] = React.useState('');
+            const [filterEndDate, setFilterEndDate] = React.useState('');
+            const [sortConfig, setSortConfig] = React.useState({ key: 'startTime', direction: 'descending' });
+            const [sessionToDelete, setSessionToDelete] = React.useState(null);
+
+            React.useEffect(() => {
+                const workSessionsRef = collection(db, `artifacts/${__app_id}/public/data/editorWorkSessions`);
+                const q = query(workSessionsRef, where("status", "==", "completed"));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const sessions = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data(),
+                        startTime: doc.data().startTime?.toDate?.(),
+                        endTime: doc.data().endTime?.toDate?.(),
+                    }));
+                    setAllSessions(sessions);
+                    setIsLoading(false);
+                }, (error) => {
+                    showMessage(`Error fetching logs: ${error.message}`, "error");
+                    setIsLoading(false);
+                });
+                return () => unsubscribe();
+            }, [db, showMessage]);
+
+            React.useEffect(() => {
+                let sessions = [...allSessions];
+
+                if (filterEditor) {
+                    sessions = sessions.filter(s => s.editorName.toLowerCase().includes(filterEditor.toLowerCase()));
+                }
+                if (filterStartDate) {
+                    sessions = sessions.filter(s => s.startTime >= new Date(filterStartDate));
+                }
+                if (filterEndDate) {
+                    const endDate = new Date(filterEndDate);
+                    endDate.setHours(23, 59, 59, 999);
+                    sessions = sessions.filter(s => s.startTime <= endDate);
+                }
+
+                sessions.sort((a, b) => {
+                    let aValue, bValue;
+                    if (sortConfig.key === 'duration') {
+                        aValue = (a.endTime || new Date()).getTime() - a.startTime.getTime();
+                        bValue = (b.endTime || new Date()).getTime() - b.startTime.getTime();
+                    } else {
+                        aValue = a[sortConfig.key];
+                        bValue = b[sortConfig.key];
+                    }
+
+                    if (aValue < bValue) return sortConfig.direction === 'ascending' ? -1 : 1;
+                    if (aValue > bValue) return sortConfig.direction === 'ascending' ? 1 : -1;
+                    return 0;
+                });
+
+                setFilteredSessions(sessions);
+            }, [allSessions, filterEditor, filterStartDate, filterEndDate, sortConfig]);
+
+            const handleSort = (key) => {
+                let direction = 'ascending';
+                if (sortConfig.key === key && sortConfig.direction === 'ascending') {
+                    direction = 'descending';
+                }
+                setSortConfig({ key, direction });
+            };
+
+            const confirmDeleteSession = async () => {
+                if (!sessionToDelete) return;
+                try {
+                    const workSessionRef = doc(db, `artifacts/${__app_id}/public/data/editorWorkSessions`, sessionToDelete.id);
+                    await deleteDoc(workSessionRef);
+                    showMessage("Log entry deleted successfully.", "success");
+                } catch (error) {
+                    showMessage(`Error deleting log: ${error.message}`, "error");
+                } finally {
+                    setSessionToDelete(null);
+                }
+            };
+
+            const getSortIndicator = (key) => {
+                if (sortConfig.key !== key) return null;
+                return sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
+            };
+
+            return (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-6xl h-[90vh] flex flex-col">
+                        <h2 className="text-2xl font-bold text-gray-900 mb-4 text-center">Work Session Logs</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                            <input
+                                type="text"
+                                placeholder="Filter by editor name..."
+                                value={filterEditor}
+                                onChange={e => setFilterEditor(e.target.value)}
+                                className="p-2 border rounded-md text-sm"
+                            />
+                            <input
+                                type="date"
+                                value={filterStartDate}
+                                onChange={e => setFilterStartDate(e.target.value)}
+                                className="p-2 border rounded-md text-sm"
+                            />
+                            <input
+                                type="date"
+                                value={filterEndDate}
+                                onChange={e => setFilterEndDate(e.target.value)}
+                                className="p-2 border rounded-md text-sm"
+                            />
+                        </div>
+                        <div className="flex-grow overflow-y-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Editor</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Project / Client</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Videos</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer" onClick={() => handleSort('startTime')}>Start Time{getSortIndicator('startTime')}</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer" onClick={() => handleSort('endTime')}>End Time{getSortIndicator('endTime')}</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer" onClick={() => handleSort('duration')}>Duration{getSortIndicator('duration')}</th>
+                                        {isAdmin && <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>}
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {isLoading ? (
+                                        <tr><td colSpan={isAdmin ? 7 : 6} className="text-center py-4">Loading logs...</td></tr>
+                                    ) : filteredSessions.length === 0 ? (
+                                        <tr><td colSpan={isAdmin ? 7 : 6} className="text-center py-4">No logs found for the selected filters.</td></tr>
+                                    ) : (
+                                        filteredSessions.map(session => (
+                                            <tr key={session.id}>
+                                                <td className="px-4 py-3 whitespace-nowrap text-sm">{session.editorName}</td>
+                                                <td className="px-4 py-3 whitespace-nowrap text-sm">
+                                                    {session.videos && session.videos.length > 0 ? (
+                                                        <>
+                                                            <div>{session.videos[0]?.projectName || 'N/A'}</div>
+                                                            <div className="text-xs text-gray-500">{session.videos[0]?.clientName || 'N/A'}</div>
+                                                        </>
+                                                    ) : (
+                                                        'N/A'
+                                                    )}
+                                                </td>
+                                                <td className="px-4 py-3 text-sm">
+                                                    {session.videos && session.videos.length > 0
+                                                        ? session.videos.map(v => v.name).join(', ')
+                                                        : 'N/A'
+                                                    }
+                                                </td>
+                                                <td className="px-4 py-3 whitespace-nowrap text-sm">{formatDateTime(session.startTime)}</td>
+                                                <td className="px-4 py-3 whitespace-nowrap text-sm">{formatDateTime(session.endTime)}</td>
+                                                <td className="px-4 py-3 whitespace-nowrap text-sm">{calculateTimeDifference(session.startTime, session.endTime)}</td>
+                                                {isAdmin && (
+                                                    <td className="px-4 py-3 whitespace-nowrap text-sm">
+                                                        <button onClick={() => setSessionToDelete(session)} className="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1 px-2 rounded-md">Delete</button>
+                                                    </td>
+                                                )}
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="flex justify-end mt-4">
+                            <button onClick={onClose} className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md">Close</button>
+                        </div>
+                        {sessionToDelete && (
+                             <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+                                <div className="bg-white rounded-md p-6 w-full max-w-sm">
+                                    <h3 className="text-lg font-semibold text-red-600 mb-2">Confirm Deletion</h3>
+                                    <p className="text-sm text-gray-700 mb-4">Are you sure you want to delete this log entry? This action cannot be undone.</p>
+                                    <div className="flex justify-end gap-2">
+                                        <button onClick={() => setSessionToDelete(null)}
+                                            className="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Cancel
+                                        </button>
+                                        <button onClick={confirmDeleteSession}
+                                            className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1.5 px-3 rounded-md transition duration-200">
+                                            Confirm
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Floating panel for today's work session
+        const EditorWorkPanel = ({ db, userId, username, showMessage }) => {
+            const [session, setSession] = React.useState(null);
+            const [loading, setLoading] = React.useState(true);
+            const todayId = `${new Date().toISOString().split('T')[0]}_${userId}`;
+            React.useEffect(() => {
+                const ref = doc(db, `artifacts/${__app_id}/public/data/workSessions`, todayId);
+                const unsub = onSnapshot(ref, (snap) => {
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        setSession({
+                            ...data,
+                            startTime: data.startTime?.toDate?.(),
+                            endTime: data.endTime?.toDate?.()
+                        });
+                    } else {
+                        setSession(null);
+                    }
+                    setLoading(false);
+                }, (error) => {
+                    showMessage(`Error loading session: ${error.message}`, 'error');
+                    setLoading(false);
+                });
+                return () => unsub();
+            }, [db, todayId, showMessage]);
+            const handleStartSession = async () => {
+                try {
+                    const ref = doc(db, `artifacts/${__app_id}/public/data/workSessions`, todayId);
+                    await setDoc(ref, {
+                        editorId: userId,
+                        editorName: username,
+                        startTime: serverTimestamp(),
+                        endTime: null,
+                        videos: [],
+                        notes: ""
+                    });
+                    showMessage("Work session started.", "success");
+                } catch (error) {
+                    showMessage(`Error starting session: ${error.message}`, "error");
+                }
+            };
+            const handleEndSession = async () => {
+                if (!session) return;
+                try {
+                    const ref = doc(db, `artifacts/${__app_id}/public/data/workSessions`, todayId);
+                    await updateDoc(ref, { endTime: serverTimestamp() });
+                    showMessage("Work session ended.", "success");
+                } catch (error) {
+                    showMessage(`Error ending session: ${error.message}`, "error");
+                }
+            };
+            if (loading) {
+                return <div className="fixed right-0 top-20 bg-white shadow-lg p-4 rounded-l-lg">Loading...</div>;
+            }
+            return (
+                <div className="fixed right-0 top-20 bg-white shadow-lg p-4 rounded-l-lg w-80 h-auto">
+                    <h3 className="text-lg font-bold mb-2">Today's Work</h3>
+                    {!session && (
+                        <button onClick={handleStartSession} className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded" >
+                            Start Session
+                        </button>
+                    )}
+                    {session && (
+                        <div>
+                            <p><strong>Start:</strong> {formatDateTime(session.startTime)}</p>
+                            {session.endTime ? (
+                                <p><strong>End:</strong> {formatDateTime(session.endTime)}</p>
+                            ) : (
+                                <button onClick={handleEndSession} className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded mt-2" >
+                                    End Session
+                                </button>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        window.App = App;
+
+        window.onload = function() {
+            const React = window.React;
+            const ReactDOM = window.ReactDOM;
+
+            if (!React || !ReactDOM) {
+                console.error("React or ReactDOM not loaded.");
+                return;
+            }
+
+            const rootElement = document.getElementById('root');
+            if (rootElement) {
+                if (!rootElement._reactRootContainer) {
+                    rootElement._reactRootContainer = ReactDOM.createRoot(rootElement);
+                }
+                rootElement._reactRootContainer.render(<App />);
+            } else {
+                console.error("Root element not found to render React application.");
+            }
+        };
+    </script>
+</body>
+</html>
